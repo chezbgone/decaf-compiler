@@ -1,0 +1,10 @@
+cradle:
+  cabal:
+    - path: "src/Main.hs"
+      component: "decaf-compiler:exe:decaf-compiler"
+
+    - path: "src/Lexer.hs"
+      component: "decaf-compiler:exe:decaf-compiler"
+
+    - path: "src/Parser.hs"
+      component: "decaf-compiler:exe:decaf-compiler"
