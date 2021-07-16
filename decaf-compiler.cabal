@@ -11,8 +11,6 @@ version:            0.1.0.0
 -- A URL where users can report bugs.
 -- bug-reports:
 
--- The license under which the package is released.
--- license:
 author:             Jason Chen and Wayne Zhao
 maintainer:         chezbgone@gmail.com
 license:            MIT
@@ -22,19 +20,32 @@ license-file:       LICENSE
 -- copyright:
 -- category:
 extra-source-files:
-    CHANGELOG.md
-    README.md
+  CHANGELOG.md
+  README.md
+
+library
+  exposed-modules:  Main
+                  , Lexer
+                  , Parser
+  build-depends:    base >=4.14 && <5
+                  , extra
+  hs-source-dirs:   src
+  ghc-options:      -Wall
+  default-language: Haskell2010
 
 executable decaf-compiler
-    main-is:          Main.hs
+  main-is:          Main.hs
+  build-depends:    base >=4.14 && <5
+  hs-source-dirs:   exe
+  default-language: Haskell2010
+  ghc-options:      -Wall -O2
 
-    -- Modules included in this executable, other than Main.
-    other-modules:    Lexer
-                    , Parser
-
-    -- LANGUAGE extensions used by modules in this package.
-    -- other-extensions:
-    build-depends:    base ^>=4.14.1.0
-    hs-source-dirs:   src
-    default-language: Haskell2010
-    ghc-options:      -Wall
+test-suite lexer
+  type:             exitcode-stdio-1.0
+  main-is:          LexerTest.hs
+  hs-source-dirs:   test
+  ghc-options:      -Wall -O2
+  build-depends:    base >=4.14 && <5
+                  , decaf-compiler
+                  , directory
+  default-language: Haskell2010
