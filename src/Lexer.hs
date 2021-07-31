@@ -1,5 +1,4 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE TupleSections #-}
 
 module Lexer where
 
@@ -74,10 +73,10 @@ data LexerError = Unexpected Char
 
 newtype Lexer a = Lexer {
   runLexer :: String -> Either LexerError (String, a)
-}
+} deriving Functor
 
-instance Functor Lexer where
-  fmap f (Lexer l) = Lexer (fmap (fmap f) . l)
+-- instance Functor Lexer where
+--   fmap f (Lexer l) = Lexer (fmap (fmap f) . l)
 
 instance Applicative Lexer where
   pure a = Lexer (\s -> Right (s, a))
@@ -123,7 +122,7 @@ char c = satisfies (c ==)
 string :: String -> Lexer String
 string = traverse char
 
-oneOf :: Alternative f => [f a] -> f a
+oneOf :: Alternative f => forall a. [f a] -> f a
 oneOf = foldl1' (<|>)
 
 notFollowedBy :: Lexer a -> Lexer ()
@@ -155,15 +154,15 @@ strLit = fmap StrLit $ char '\"' *> many (satisfies (/= '\"')) <* char '\"'
 literal :: Lexer Token
 literal = decLit <|> hexLit <|> boolLit <|> charLit <|> strLit
 
-isAlphaOrUnderscore :: Char -> Bool
-isAlphaOrUnderscore c = c == '_' || isAlpha c
+identCharHead :: Char -> Bool
+identCharHead c = c == '_' || isAlpha c
 
-isAlphaNumOrUnderscore :: Char -> Bool
-isAlphaNumOrUnderscore c = c == '_' || isAlphaNum c
+identCharRest :: Char -> Bool
+identCharRest c = c == '_' || isAlphaNum c
 
 identifier :: Lexer Token
-identifier = fmap Identifier $ (:) <$> satisfies isAlphaOrUnderscore
-                                   <*> many (satisfies isAlphaNumOrUnderscore)
+identifier = fmap Identifier $ (:) <$> satisfies identCharHead
+                                   <*> many (satisfies identCharRest)
 
 keyword :: Lexer Token
 keyword = oneOf [ string "bool" $> Bool
@@ -178,7 +177,7 @@ keyword = oneOf [ string "bool" $> Bool
                 , string "while" $> While
                 , string "return" $> Return
                 , string "len" $> Len
-                ] <* notFollowedBy (satisfies isAlphaNumOrUnderscore)
+                ] <* notFollowedBy (satisfies identCharRest)
 
 symb :: Lexer Token
 symb = oneOf [ string "!"  $> Not
