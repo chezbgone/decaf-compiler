@@ -1,22 +1,27 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TupleSections #-}
+
 module Lexer where
 
-import Control.Monad
 import Control.Applicative
+import Control.Monad
+import Data.Char
+import Data.Functor
+import Data.List
 
 data ScannedToken = ScannedToken { line :: Int
                                  , column :: Int
                                  , token :: Token
                                  } deriving (Eq)
 
-data Token = DecLiteral String
-           | HexLiteral String
-           | BoolLiteral Bool
-           | CharLiteral Char
-           | StringLiteral String
-           | Keyword String
+data Token = DecLit String
+           | HexLit String
+           | BoolLit Bool
+           | CharLit Char
+           | StrLit String
            | Identifier String
+           | LineComment String
+           | BlockComment String
            | Not
            | And
            | Or
@@ -36,42 +41,36 @@ data Token = DecLiteral String
            | RParens
            | LBrace
            | RBrace
-           | LBrack
-           | RBrack
-           | Import
-           | Int
-           | Bool
-           | Void
+           | LBracket
+           | RBracket
            | Semicolon
-           | Len
            | Gets
            | PlusGets
            | MinusGets
            | PlusPlus
            | MinusMinus
+           | Bool
+           | Int
+           | Void
+           | Import
+           | Break
+           | Continue
            | If
            | Else
            | For
            | While
            | Return
-           | Break
-           | Continue
-           deriving (Eq)
+           | Len
+           deriving (Eq, Show)
 
-instance Show Token where
-  show (Keyword k) = k
-  show (Identifier s) = s
-  show LBrace = "{"
-  show RBrace = "}"
-  show _ = undefined
-
-
--- =========== --
+-----------------
 -- Lexer types --
--- =========== --
+-----------------
 
 data LexerError = Unexpected Char
+                | UnexpectedChar
                 | UnexpectedEOF
+                deriving (Show)
 
 newtype Lexer a = Lexer {
   runLexer :: String -> Either LexerError (String, a)
@@ -105,9 +104,9 @@ instance Monad Lexer where
 
 instance MonadPlus Lexer
 
--- ===================== --
+---------------------------
 -- Primitive combinators --
--- ===================== --
+---------------------------
 
 unexpected :: String -> LexerError
 unexpected "" = UnexpectedEOF
@@ -123,3 +122,112 @@ char c = satisfies (c ==)
 
 string :: String -> Lexer String
 string = traverse char
+
+oneOf :: Alternative f => [f a] -> f a
+oneOf = foldl1' (<|>)
+
+notFollowedBy :: Lexer a -> Lexer ()
+notFollowedBy l =
+  optional l >>= -- detect string
+    maybe (pure ())       -- if not detected then success
+          (const $ Lexer $ const $ Left UnexpectedChar) -- else fail
+
+------------
+-- Tokens --
+------------
+
+decLit :: Lexer Token
+decLit = fmap DecLit $ some $ satisfies isDigit
+
+hexLit :: Lexer Token
+hexLit = fmap HexLit $ string "0x" *> some (satisfies isHexDigit)
+
+boolLit :: Lexer Token
+boolLit = string "true" $> BoolLit True <|>
+            string "false" $> BoolLit False
+
+charLit :: Lexer Token
+charLit = fmap CharLit $ char '\'' *> satisfies (/= '\'') <* char '\''
+
+strLit :: Lexer Token
+strLit = fmap StrLit $ char '\"' *> many (satisfies (/= '\"')) <* char '\"'
+
+literal :: Lexer Token
+literal = decLit <|> hexLit <|> boolLit <|> charLit <|> strLit
+
+isAlphaOrUnderscore :: Char -> Bool
+isAlphaOrUnderscore c = c == '_' || isAlpha c
+
+isAlphaNumOrUnderscore :: Char -> Bool
+isAlphaNumOrUnderscore c = c == '_' || isAlphaNum c
+
+identifier :: Lexer Token
+identifier = fmap Identifier $ (:) <$> satisfies isAlphaOrUnderscore
+                                   <*> many (satisfies isAlphaNumOrUnderscore)
+
+keyword :: Lexer Token
+keyword = oneOf [ string "bool" $> Bool
+                , string "int" $> Int
+                , string "void" $> Void
+                , string "import" $> Import
+                , string "break" $> Break
+                , string "continue" $> Continue
+                , string "if" $> If
+                , string "else" $> Else
+                , string "for" $> For
+                , string "while" $> While
+                , string "return" $> Return
+                , string "len" $> Len
+                ] <* notFollowedBy (satisfies isAlphaNumOrUnderscore)
+
+symb :: Lexer Token
+symb = oneOf [ string "!"  $> Not
+             , string "&&" $> And
+             , string "||" $> Or
+             , string "==" $> Equals
+             , string "!=" $> NEquals
+             , string "+"  $> Plus
+             , string "-"  $> Minus
+             , string "*"  $> Times
+             , string "/"  $> Divide
+             , string "%"  $> Modulo
+             , string "<"  $> Less
+             , string ">"  $> Greater
+             , string "<=" $> LessEq
+             , string ">=" $> GreaterEq
+             , string ","  $> Comma
+             , string "("  $> LParens
+             , string ")"  $> RParens
+             , string "{"  $> LBrace
+             , string "}"  $> RBrace
+             , string "["  $> LBracket
+             , string "]"  $> RBracket
+             , string ";"  $> Semicolon
+             , string "="  $> Gets
+             , string "+=" $> PlusGets
+             , string "-=" $> MinusGets
+             , string "++" $> PlusPlus
+             , string "--" $> MinusMinus
+             ]
+
+
+lineComment :: Lexer Token
+lineComment = fmap LineComment $
+  string "//" *> many (satisfies (/='\n')) <* optional (char '\n')
+
+-- content of a block comment
+blockComment' :: Lexer String
+blockComment' = string begin *> inComment
+  where begin = "/*"
+        end = "*/"
+        inComment = string "*/" $> "" <|>
+          ((++) <$> blockComment' <*> inComment) <|>
+          ((++) <$> some (satisfies (`notElem` (begin ++ end))) <*> inComment) <|>
+          ((:) <$> oneOf (char <$> (begin ++ end)) <*> inComment)
+
+blockComment :: Lexer Token
+blockComment = BlockComment <$> blockComment'
+
+
+tokenL :: Lexer Token
+tokenL = literal <|> keyword <|> identifier <|> symb
