@@ -92,8 +92,13 @@ instance Alternative Lexer where
     \input -> case (la input, lb input) of
                 (a, Left _) -> a
                 (Left _, b) -> b
-                (a@(Right (restA, _)), b@(Right (restB, _))) ->
-                  if length restA <= length restB then a else b
+                (a, _) -> a
+  -- Lexer la <|> Lexer lb = Lexer $
+  --   \input -> case (la input, lb input) of
+  --               (a, Left _) -> a
+  --               (Left _, b) -> b
+  --               (a@(Right (restA, _)), b@(Right (restB, _))) ->
+  --                 if length restA <= length restB then a else b
 
 instance Monad Lexer where
   Lexer la >>= f = Lexer $
@@ -125,7 +130,7 @@ string = traverse char
 oneOf :: Alternative f => forall a. [f a] -> f a
 oneOf = foldl1' (<|>)
 
-notFollowedBy :: Lexer a -> Lexer ()
+notFollowedBy :: forall a. Lexer a -> Lexer ()
 notFollowedBy l =
   optional l >>= -- detect string
     maybe (pure ())       -- if not detected then success
@@ -143,10 +148,17 @@ hexLit = fmap HexLit $ string "0x" *> some (satisfies isHexDigit)
 
 boolLit :: Lexer Token
 boolLit = string "true" $> BoolLit True <|>
-            string "false" $> BoolLit False
+          string "false" $> BoolLit False
 
 charLit :: Lexer Token
-charLit = fmap CharLit $ char '\'' *> satisfies (/= '\'') <* char '\''
+charLit = fmap CharLit $ char '\'' *> inChar <* char '\''
+  where inChar :: Lexer Char
+        inChar = satisfies (/= '\'') <|>
+                 string "\\n" $> '\n' <|>
+                 string "\\t" $> '\t' <|>
+                 string "\\\\" $> '\\' <|>
+                 string "\\\"" $> '"' <|>
+                 string "\\\'" $> '\''
 
 strLit :: Lexer Token
 strLit = fmap StrLit $ char '\"' *> many (satisfies (/= '\"')) <* char '\"'
@@ -179,36 +191,35 @@ keyword = oneOf [ string "bool" $> Bool
                 , string "len" $> Len
                 ] <* notFollowedBy (satisfies identCharRest)
 
-symb :: Lexer Token
-symb = oneOf [ string "!"  $> Not
-             , string "&&" $> And
-             , string "||" $> Or
-             , string "==" $> Equals
-             , string "!=" $> NEquals
-             , string "+"  $> Plus
-             , string "-"  $> Minus
-             , string "*"  $> Times
-             , string "/"  $> Divide
-             , string "%"  $> Modulo
-             , string "<"  $> Less
-             , string ">"  $> Greater
-             , string "<=" $> LessEq
-             , string ">=" $> GreaterEq
-             , string ","  $> Comma
-             , string "("  $> LParens
-             , string ")"  $> RParens
-             , string "{"  $> LBrace
-             , string "}"  $> RBrace
-             , string "["  $> LBracket
-             , string "]"  $> RBracket
-             , string ";"  $> Semicolon
-             , string "="  $> Gets
-             , string "+=" $> PlusGets
-             , string "-=" $> MinusGets
-             , string "++" $> PlusPlus
-             , string "--" $> MinusMinus
-             ]
-
+symbol :: Lexer Token
+symbol = oneOf [ string "!"  $> Not
+               , string "&&" $> And
+               , string "||" $> Or
+               , string "==" $> Equals
+               , string "!=" $> NEquals
+               , string "+"  $> Plus
+               , string "-"  $> Minus
+               , string "*"  $> Times
+               , string "/"  $> Divide
+               , string "%"  $> Modulo
+               , string "<"  $> Less
+               , string ">"  $> Greater
+               , string "<=" $> LessEq
+               , string ">=" $> GreaterEq
+               , string ","  $> Comma
+               , string "("  $> LParens
+               , string ")"  $> RParens
+               , string "{"  $> LBrace
+               , string "}"  $> RBrace
+               , string "["  $> LBracket
+               , string "]"  $> RBracket
+               , string ";"  $> Semicolon
+               , string "="  $> Gets
+               , string "+=" $> PlusGets
+               , string "-=" $> MinusGets
+               , string "++" $> PlusPlus
+               , string "--" $> MinusMinus
+               ]
 
 lineComment :: Lexer Token
 lineComment = fmap LineComment $
@@ -227,6 +238,15 @@ blockComment' = string begin *> inComment
 blockComment :: Lexer Token
 blockComment = BlockComment <$> blockComment'
 
+comment :: Lexer Token
+comment = lineComment <|> blockComment
 
-tokenL :: Lexer Token
-tokenL = literal <|> keyword <|> identifier <|> symb
+whitespace :: Lexer ()
+whitespace = void $ many $ void (some whitespaceChar) <|> void (some comment)
+  where whitespaceChar = char ' ' <|> char '\n' <|> char '\t'
+
+oneToken :: Lexer Token
+oneToken = literal <|> keyword <|> identifier <|> symbol
+
+tokens :: Lexer [Token]
+tokens = whitespace *> many (oneToken <* whitespace)
