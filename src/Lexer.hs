@@ -6,12 +6,20 @@ import Control.Applicative
 import Control.Monad
 import Data.Char
 import Data.Functor
+import Data.Foldable (asum)
 import Data.List
 
-data ScannedToken = ScannedToken { line :: Int
-                                 , column :: Int
-                                 , token :: Token
-                                 } deriving (Eq)
+-----------------
+-- Lexer types --
+-----------------
+
+data Position = Position { line :: Int
+                         , column :: Int
+                         } deriving (Eq, Show)
+
+data RawToken = RawToken { position :: Position
+                         , token :: Token
+                         } deriving (Eq, Show)
 
 data Token = DecLit String
            | HexLit String
@@ -62,43 +70,34 @@ data Token = DecLit String
            | Len
            deriving (Eq, Show)
 
------------------
--- Lexer types --
------------------
+type UnprocessedString = (String, Position)
 
-data LexerError = Unexpected Char
-                | UnexpectedChar
-                | UnexpectedEOF
-                deriving (Show)
+data LexerError = Unexpected Char Position
+                | UnexpectedEOF Position
+                | Fatal String Position
+                deriving (Eq, Show)
 
 newtype Lexer a = Lexer {
-  runLexer :: String -> Either LexerError (String, a)
+  runLexer :: UnprocessedString -> Either LexerError (UnprocessedString, a)
 } deriving Functor
-
--- instance Functor Lexer where
---   fmap f (Lexer l) = Lexer (fmap (fmap f) . l)
 
 instance Applicative Lexer where
   pure a = Lexer (\s -> Right (s, a))
   Lexer lf <*> Lexer la = Lexer $
     \input -> do
       (rest, f) <- lf input
-      (s, a) <- la rest
-      pure (s, f a)
+      (rest', a) <- la rest
+      pure (rest', f a)
 
 instance Alternative Lexer where
   empty = Lexer (Left . unexpected)
   Lexer la <|> Lexer lb = Lexer $
     \input -> case (la input, lb input) of
-                (a, Left _) -> a
-                (Left _, b) -> b
-                (a, _) -> a
-  -- Lexer la <|> Lexer lb = Lexer $
-  --   \input -> case (la input, lb input) of
-  --               (a, Left _) -> a
-  --               (Left _, b) -> b
-  --               (a@(Right (restA, _)), b@(Right (restB, _))) ->
-  --                 if length restA <= length restB then a else b
+                (e@(Left (Fatal _ _)), _) -> e
+                (_, e@(Left (Fatal _ _))) -> e
+                (a, Left _)               -> a
+                (Left _, b)               -> b
+                (a, _)                    -> a
 
 instance Monad Lexer where
   Lexer la >>= f = Lexer $
@@ -112,14 +111,29 @@ instance MonadPlus Lexer
 -- Primitive combinators --
 ---------------------------
 
-unexpected :: String -> LexerError
-unexpected "" = UnexpectedEOF
-unexpected (c:_) = Unexpected c
+fatal :: forall a. String -> Lexer a -> Lexer a
+fatal msg (Lexer l) =
+  Lexer $ \s -> case l s of
+    e@(Left (Fatal _ _))     -> e
+    Left (Unexpected _ pos)  -> Left (Fatal msg pos)
+    Left (UnexpectedEOF pos) -> Left (Fatal msg pos)
+    res                      -> res
+
+unexpected :: UnprocessedString -> LexerError
+unexpected ("", p) = UnexpectedEOF p
+unexpected (c:_, p) = Unexpected c p
+
+skip :: Char -> Position -> Position
+skip '\n' (Position ln _  ) = Position (ln+1) 0
+skip _    (Position ln col) = Position ln (col+1)
 
 satisfies :: (Char -> Bool) -> Lexer Char
-satisfies p = Lexer $ \case
-    c : cs | p c -> Right (cs, c)
-    rest         -> Left $ unexpected rest
+satisfies p = Lexer $
+  \case (c:rest, pos) | p c -> Right ((rest, skip c pos), c)
+        s                   -> Left $ unexpected s
+
+anyChar :: Lexer Char
+anyChar = satisfies (const True)
 
 char :: Char -> Lexer Char
 char c = satisfies (c ==)
@@ -128,13 +142,13 @@ string :: String -> Lexer String
 string = traverse char
 
 oneOf :: Alternative f => forall a. [f a] -> f a
-oneOf = foldl1' (<|>)
+oneOf = asum
 
 notFollowedBy :: forall a. Lexer a -> Lexer ()
-notFollowedBy l =
-  optional l >>= -- detect string
-    maybe (pure ())       -- if not detected then success
-          (const $ Lexer $ const $ Left UnexpectedChar) -- else fail
+notFollowedBy la = Lexer $ \s -> runLexer (newLexer s) s
+  where newLexer str = optional la >>= -- detect a
+          maybe (pure ())       -- if not detected then success
+            (const $ Lexer $ const $ Left $ unexpected str)
 
 ------------
 -- Tokens --
@@ -147,21 +161,27 @@ hexLit :: Lexer Token
 hexLit = fmap HexLit $ string "0x" *> some (satisfies isHexDigit)
 
 boolLit :: Lexer Token
-boolLit = string "true" $> BoolLit True <|>
-          string "false" $> BoolLit False
+boolLit = (string "true" $> BoolLit True <|>
+           string "false" $> BoolLit False) <*
+             notFollowedBy (satisfies identCharRest)
+
+inChar :: Lexer Char
+inChar = oneOf [char (chr i) | i <- [32..126] \\ fmap (ord . fst) escapedChars]
+  <|> char '\\' *> fatal errMsg (oneOf [string e $> c | (c, e) <- escapedChars])
+    where escapedChars = [ ('\n', "n")
+                         , ('\t', "t")
+                         , ('\\', "\\")
+                         , ('"', "\"")
+                         , ('\'', "\'")
+                         ]
+          errMsg = "illegal escaped character"
 
 charLit :: Lexer Token
-charLit = fmap CharLit $ char '\'' *> inChar <* char '\''
-  where inChar :: Lexer Char
-        inChar = satisfies (/= '\'') <|>
-                 string "\\n" $> '\n' <|>
-                 string "\\t" $> '\t' <|>
-                 string "\\\\" $> '\\' <|>
-                 string "\\\"" $> '"' <|>
-                 string "\\\'" $> '\''
+charLit = fmap CharLit $ char '\'' *> inChar <* fatal errMsg (char '\'')
+  where errMsg = "unclosed character literal"
 
 strLit :: Lexer Token
-strLit = fmap StrLit $ char '\"' *> many (satisfies (/= '\"')) <* char '\"'
+strLit = fmap StrLit $ char '\"' *> many inChar <* char '\"'
 
 literal :: Lexer Token
 literal = decLit <|> hexLit <|> boolLit <|> charLit <|> strLit
@@ -192,20 +212,20 @@ keyword = oneOf [ string "bool" $> Bool
                 ] <* notFollowedBy (satisfies identCharRest)
 
 symbol :: Lexer Token
-symbol = oneOf [ string "!"  $> Not
-               , string "&&" $> And
+symbol = oneOf [ string "&&" $> And
                , string "||" $> Or
                , string "==" $> Equals
                , string "!=" $> NEquals
-               , string "+"  $> Plus
-               , string "-"  $> Minus
-               , string "*"  $> Times
-               , string "/"  $> Divide
+               , string "<=" $> LessEq
+               , string ">=" $> GreaterEq
+               , string "+=" $> PlusGets
+               , string "-=" $> MinusGets
+               , string "++" $> PlusPlus
+               , string "--" $> MinusMinus
+               , string "!"  $> Not
                , string "%"  $> Modulo
                , string "<"  $> Less
                , string ">"  $> Greater
-               , string "<=" $> LessEq
-               , string ">=" $> GreaterEq
                , string ","  $> Comma
                , string "("  $> LParens
                , string ")"  $> RParens
@@ -214,39 +234,47 @@ symbol = oneOf [ string "!"  $> Not
                , string "["  $> LBracket
                , string "]"  $> RBracket
                , string ";"  $> Semicolon
+               , string "+"  $> Plus
+               , string "-"  $> Minus
+               , string "*"  $> Times
+               , string "/"  $> Divide
                , string "="  $> Gets
-               , string "+=" $> PlusGets
-               , string "-=" $> MinusGets
-               , string "++" $> PlusPlus
-               , string "--" $> MinusMinus
                ]
 
 lineComment :: Lexer Token
 lineComment = fmap LineComment $
   string "//" *> many (satisfies (/='\n')) <* optional (char '\n')
 
--- content of a block comment
-blockComment' :: Lexer String
-blockComment' = string begin *> inComment
-  where begin = "/*"
-        end = "*/"
-        inComment = string "*/" $> "" <|>
-          ((++) <$> blockComment' <*> inComment) <|>
-          ((++) <$> some (satisfies (`notElem` (begin ++ end))) <*> inComment) <|>
-          ((:) <$> oneOf (char <$> (begin ++ end)) <*> inComment)
-
 blockComment :: Lexer Token
-blockComment = BlockComment <$> blockComment'
+blockComment = BlockComment <$> (string begin *> fatal errMsg inComment)
+  where
+    (begin, end) = ("/*", "*/")
+    delimChars = nub (begin <> end)
+    inBlockComment = (\c -> begin ++ c ++ end) <$> (string begin *> inComment)
+    inComment = string end $> "" <|>
+      (++) <$> inBlockComment <*> inComment <|>
+      (++) <$> some (satisfies (`notElem` delimChars)) <*> inComment <|>
+      (:) <$ notFollowedBy (string begin) <*> oneOf (char <$> delimChars) <*> inComment
+    errMsg = "unclosed block comment"
 
 comment :: Lexer Token
 comment = lineComment <|> blockComment
 
 whitespace :: Lexer ()
-whitespace = void $ many $ void (some whitespaceChar) <|> void (some comment)
+whitespace = void $ some whitespaceChar
   where whitespaceChar = char ' ' <|> char '\n' <|> char '\t'
 
 oneToken :: Lexer Token
-oneToken = literal <|> keyword <|> identifier <|> symbol
+oneToken = comment <|> literal <|> keyword <|> identifier <|> symbol
 
 tokens :: Lexer [Token]
-tokens = whitespace *> many (oneToken <* whitespace)
+tokens = optional whitespace *> some (oneToken <* optional whitespace)
+
+lexTokens :: UnprocessedString -> [Either LexerError Token]
+lexTokens = lexTokens'
+  where trimStart str = either (const str) fst $ runLexer whitespace str
+        lexTokens' :: UnprocessedString -> [Either LexerError Token]
+        lexTokens' ("", _) = []
+        lexTokens' u@(x:xs, pos) = case runLexer oneToken (trimStart u) of
+          Left err          -> Left err : lexTokens' (xs, skip x pos)
+          Right (rest, tok) -> Right tok : lexTokens' rest
