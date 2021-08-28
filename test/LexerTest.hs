@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
+{-# OPTIONS_GHC -Wno-incomplete-patterns #-}
 
 import Lexer
 
@@ -6,6 +7,9 @@ import Control.Applicative
 
 import Test.Tasty
 import Test.Tasty.HUnit
+import Data.Either
+import Data.Maybe
+import Data.List
 
 inputDir, outputDir :: String
 inputDir = "tests-portable/scanner/input/"
@@ -13,24 +17,89 @@ outputDir = "tests-portable/scanner/output/"
 
 main :: IO ()
 main = do
-  _ <- getSysTests
-  defaultMain $ testGroup "Lexer Tests"
-    [ customTests ]
+  sysTestTree <- traverse getSysTests $
+    [ "char" <> show (n :: Integer) | n <- [1..15]] <>
+    [ "hexlit" <> show (n :: Integer) | n <- [1, 2, 4]] <>
+    [ "number" <> show (n :: Integer) | n <- [1..5]] <>
+    [ "string" <> show (n :: Integer) | n <- [1..3]] <>
+    [ "literal" <> show (n :: Integer) | n <- [1..6]] <>
+      [ "literals" ] <>
+    [ "op" <> show (n :: Integer) | n <- [1..8]] <>
+    [ "id" <> show (n :: Integer) | n <- [1..5]] <>
+    [ "tokens" <> show (n :: Integer) | n <- [1..6]] <>
+    [ "ws" <> show (n :: Integer) | n <- [1, 2]] <>
+    [ "variants" ]
+  let sysTests = testGroup "System Tests" sysTestTree
+  defaultMain $ testGroup "Lexer Tests" [ customTests , sysTests ]
 
-getSysTests :: IO TestTree
-getSysTests = testGroup "System Tests" <$> do
-  let test = "char4"
+formatToken :: RawToken -> Maybe String
+formatToken RawToken {position = Position {line, column}, token}
+  = case token of
+      LineComment _  -> Nothing
+      BlockComment _ -> Nothing
+      CharLit '"'    -> Just $ unwords [show line, "CHARLITERAL", "'\\\"'"]
+      CharLit c      -> Just $ unwords [show line, "CHARLITERAL", show c]
+      HexLit h       -> Just $ unwords [show line, "INTLITERAL 0x" <> h]
+      DecLit d       -> Just $ unwords [show line, "INTLITERAL", d]
+      BoolLit b      -> Just $ unwords [show line, "BOOLEANLITERAL"
+                                       , if b then "true" else "false"]
+      StrLit s       -> Just $ unwords [show line, "STRINGLITERAL", show' s]
+      Identifier n   -> Just $ unwords [show line, "IDENTIFIER", n]
+      Bool           -> Just $ unwords [show line, "bool"]
+      Int            -> Just $ unwords [show line, "int"]
+      Void           -> Just $ unwords [show line, "void"]
+      Import         -> Just $ unwords [show line, "import"]
+      Break          -> Just $ unwords [show line, "break"]
+      Continue       -> Just $ unwords [show line, "continue"]
+      If             -> Just $ unwords [show line, "if"]
+      Else           -> Just $ unwords [show line, "else"]
+      For            -> Just $ unwords [show line, "for"]
+      While          -> Just $ unwords [show line, "while"]
+      Return         -> Just $ unwords [show line, "return"]
+      Len            -> Just $ unwords [show line, "len"]
+      And            -> Just $ unwords [show line, "&&"]
+      Or             -> Just $ unwords [show line, "||"]
+      Equals         -> Just $ unwords [show line, "=="]
+      NEquals        -> Just $ unwords [show line, "!="]
+      LessEq         -> Just $ unwords [show line, "<="]
+      GreaterEq      -> Just $ unwords [show line, ">="]
+      PlusGets       -> Just $ unwords [show line, "+="]
+      MinusGets      -> Just $ unwords [show line, "-="]
+      PlusPlus       -> Just $ unwords [show line, "++"]
+      MinusMinus     -> Just $ unwords [show line, "--"]
+      Not            -> Just $ unwords [show line, "!"]
+      Modulo         -> Just $ unwords [show line, "%"]
+      Less           -> Just $ unwords [show line, "<"]
+      Greater        -> Just $ unwords [show line, ">"]
+      Comma          -> Just $ unwords [show line, ","]
+      LParens        -> Just $ unwords [show line, "("]
+      RParens        -> Just $ unwords [show line, ")"]
+      LBrace         -> Just $ unwords [show line, "{"]
+      RBrace         -> Just $ unwords [show line, "}"]
+      LBracket       -> Just $ unwords [show line, "["]
+      RBracket       -> Just $ unwords [show line, "]"]
+      Semicolon      -> Just $ unwords [show line, ";"]
+      Plus           -> Just $ unwords [show line, "+"]
+      Minus          -> Just $ unwords [show line, "-"]
+      Times          -> Just $ unwords [show line, "*"]
+      Divide         -> Just $ unwords [show line, "/"]
+      Gets           -> Just $ unwords [show line, "="]
+      where show' :: String -> String
+            show' = escSingleQuotes . show
+              where escSingleQuotes "" = ""
+                    escSingleQuotes ('\'':cs) = '\\':'\'':escSingleQuotes cs
+                    escSingleQuotes (c:cs) = c:escSingleQuotes cs
+
+getSysTests :: String -> IO TestTree
+getSysTests test = do
   fin  <- readFile $ inputDir <> test <> ".dcf"
   fout <- readFile $ outputDir <> test <> ".out"
-  putStr "----------------\n"
-  putStrLn fin
-  putStr "----------------\n"
-  let res = lexTokens (fin, Position 0 0)
-  mapM_ print res
-  putStr "----------------\n"
-  putStrLn fout
-  putStr "----------------\n"
-  pure [testCase "" $ "" @?= ""]
+  let (errs, tokens) = partitionEithers $ rawTokens (fin, Position 1 0)
+  pure $ testCase test $
+    if null errs
+       then unlines (mapMaybe formatToken tokens) @?= fout
+       else assertBool "no error expected" $
+         any (test `isPrefixOf`) $ lines fout
 
 customTests :: TestTree
 customTests = testGroup "Custom tests"
@@ -51,37 +120,31 @@ instanceTests = testGroup "Instances"
                           Right ((rest, Position ln (col+1)), c) -- one Char
      in runLexer ((,) <$> lexer1 <*> lexer2) ("abc", Position 3 10) @?=
        Right (("bc", Position 3 11), (True, 'a'))
-
   , testCase "Alternative first" $
     let lexer1 = Lexer $ \s -> Right (s, 'X') -- const X
         lexer2 = Lexer $ \(_, pos) -> Left (UnexpectedEOF pos)
      in runLexer (lexer1 <|> lexer2) ("abc", Position 3 10) @?=
        Right (("abc", Position 3 10), 'X')
-
   , testCase "Alternative second" $
     let lexer1 = Lexer $ \(_, pos) -> Left (UnexpectedEOF pos)
         lexer2 = Lexer $ \s -> Right (s, 'X') -- const X
      in runLexer (lexer1 <|> lexer2) ("abc", Position 3 10) @?=
        Right (("abc", Position 3 10), 'X')
-
   , testCase "Alternative both" $
     let lexer1 = Lexer $ \s -> Right (s, 'X')
         lexer2 = Lexer $ \s -> Right (s, 'Y')
      in runLexer (lexer1 <|> lexer2) ("abc", Position 3 10) @?=
        Right (("abc", Position 3 10), 'X')
-
   , testCase "Alternative both (longer)" $
     let lexer1 = Lexer $ \s -> Right (s, 'X')
         lexer2 = Lexer $ \(_, p) -> Right (("", p), 'Y')
      in runLexer (lexer1 <|> lexer2) ("abc", Position 3 10) @?=
        Right (("abc", Position 3 10), 'X')
-
   , testCase "Alternative neither" $
     let lexer1 = Lexer @() $ const $ Left (UnexpectedEOF $ Position 0 0)
         lexer2 = Lexer     $ const $ Left (UnexpectedEOF $ Position 0 1)
      in runLexer (lexer1 <|> lexer2) ("abc", Position 3 10) @?=
        Left (UnexpectedEOF $ Position 0 0)
-
   , testCase "Monad accept" $
     let lexer1 = Lexer $ \(c:rest, Position ln col) ->
                           Right ((rest, Position ln (col+1)), c) -- one Char
@@ -91,7 +154,6 @@ instanceTests = testGroup "Instances"
           s -> Left $ unexpected s
      in runLexer (lexer1 >>= charL) ("aac", Position 3 10) @?=
        Right (("c", Position 3 12), "aa")
-
   , testCase "Monad reject" $
     let lexer1 = Lexer $ \(c:rest, Position ln col) ->
                           Right ((rest, Position ln (col+1)), c) -- one Char
@@ -110,7 +172,7 @@ primitiveTests = testGroup "Primitives"
       let isVowel = (`elem` "aeiou")
        in runLexer (satisfies isVowel) ("arest", Position 1 1) @?=
          Right (("rest", Position 1 2), 'a')
-         
+
     , testCase "reject" $
       let isVowel = (`elem` "aeiou")
        in runLexer (satisfies isVowel) ("xrest", Position 1 1) @?=
@@ -203,6 +265,9 @@ literalTests = testGroup "Literals"
     , testCase "accept then symbol" $
       runLexer decLit ("123+", Position 2 3) @?=
         Right (("+", Position 2 6), DecLit "123")
+    , testCase "no negative" $
+      runLexer decLit ("-1", Position 2 3) @?=
+        Left (Unexpected '-' (Position 2 3))
     , testCase "reject" $
       runLexer decLit ("x0l", Position 2 3) @?=
         Left (Unexpected 'x' (Position 2 3))
@@ -211,16 +276,16 @@ literalTests = testGroup "Literals"
     [ testCase "accept" $
       runLexer hexLit ("0x1b2ar", Position 2 3) @?=
         Right (("r", Position 2 9), HexLit "1b2a")
-    , testCase "accept then space" $
-      runLexer hexLit ("0x1b2a ", Position 2 3) @?=
-        Right ((" ", Position 2 9), HexLit "1b2a")
+    , testCase "accept capital" $
+      runLexer hexLit ("0x1B2A ", Position 2 3) @?=
+        Right ((" ", Position 2 9), HexLit "1B2A")
     , testCase "accept then symbol" $
       runLexer hexLit ("0x1b2a+", Position 2 3) @?=
         Right (("+", Position 2 9), HexLit "1b2a")
     , testCase "reject empty" $
       runLexer hexLit ("0xl", Position 2 3) @?=
         Left (Unexpected 'l' (Position 2 5))
-    , testCase "reject capital" $
+    , testCase "reject capital x" $
       runLexer hexLit ("0X1", Position 2 3) @?=
         Left (Unexpected 'X' (Position 2 4))
     ]
@@ -348,6 +413,9 @@ identifierKeywordsTests = testGroup "Identifiers/Keywords"
     [ testCase "alphabetical" $
       runLexer identifier ("abc#", Position 0 0) @?=
         Right (("#", Position 0 3), Identifier "abc")
+    , testCase "capital" $
+      runLexer identifier ("Abc#", Position 0 0) @?=
+        Right (("#", Position 0 3), Identifier "Abc")
     , testCase "alphanumeric" $
       runLexer identifier ("ab0c1#", Position 0 0) @?=
         Right (("#", Position 0 5), Identifier "ab0c1")

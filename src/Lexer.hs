@@ -184,7 +184,7 @@ strLit :: Lexer Token
 strLit = fmap StrLit $ char '\"' *> many inChar <* char '\"'
 
 literal :: Lexer Token
-literal = decLit <|> hexLit <|> boolLit <|> charLit <|> strLit
+literal = hexLit <|> decLit <|> boolLit <|> charLit <|> strLit
 
 identCharHead :: Char -> Bool
 identCharHead c = c == '_' || isAlpha c
@@ -267,14 +267,14 @@ whitespace = void $ some whitespaceChar
 oneToken :: Lexer Token
 oneToken = comment <|> literal <|> keyword <|> identifier <|> symbol
 
-tokens :: Lexer [Token]
-tokens = optional whitespace *> some (oneToken <* optional whitespace)
-
-lexTokens :: UnprocessedString -> [Either LexerError Token]
-lexTokens = lexTokens'
-  where trimStart str = either (const str) fst $ runLexer whitespace str
-        lexTokens' :: UnprocessedString -> [Either LexerError Token]
-        lexTokens' ("", _) = []
-        lexTokens' u@(x:xs, pos) = case runLexer oneToken (trimStart u) of
-          Left err          -> Left err : lexTokens' (xs, skip x pos)
-          Right (rest, tok) -> Right tok : lexTokens' rest
+rawTokens :: UnprocessedString -> [Either LexerError RawToken]
+rawTokens ("", _) = []
+rawTokens u@(x:xs, pos) =
+  let trimStart str = either (const str) fst $ runLexer whitespace str
+      trimmed = trimStart u
+      (_, startPos) = trimmed
+   in if fst trimmed == ""
+         then []
+         else case runLexer oneToken trimmed of
+           Left err          -> Left err : rawTokens (xs, skip x pos)
+           Right (rest, tok) -> Right (RawToken startPos tok) : rawTokens rest
