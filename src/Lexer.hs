@@ -83,6 +83,11 @@ newtype Lexer a = Lexer {
 
 instance Applicative Lexer where
   pure a = Lexer (\s -> Right (s, a))
+  liftA2 f (Lexer la) (Lexer lb) = Lexer $
+    \input -> do
+      (rest, a) <- la input
+      (rest', b) <- lb rest
+      pure (rest', f a b)
   Lexer lf <*> Lexer la = Lexer $
     \input -> do
       (rest, f) <- lf input

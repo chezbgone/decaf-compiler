@@ -11,7 +11,7 @@ version:            0.1.0.0
 -- A URL where users can report bugs.
 -- bug-reports:
 
-author:             Jason Chen and Wayne Zhao
+author:             Jason Chen
 maintainer:         chezbgone@gmail.com
 license:            MIT
 license-file:       LICENSE
@@ -30,17 +30,43 @@ library
   hs-source-dirs:     src
   default-language:   Haskell2010
   ghc-options:        -Wall -O2
-  default-extensions: EmptyCase PostfixOperators TupleSections ImportQualifiedPost NamedFieldPuns BangPatterns
+  default-extensions: EmptyCase PostfixOperators TupleSections
+                      ImportQualifiedPost NamedFieldPuns BangPatterns
                       BinaryLiterals HexFloatLiterals NumericUnderscores
-                      GADTSyntax RankNTypes TypeApplications PolyKinds StandaloneKindSignatures ExistentialQuantification TypeOperators ConstraintKinds
-                      ExplicitForAll KindSignatures NamedWildCards ScopedTypeVariables
+                      GADTSyntax RankNTypes TypeApplications PolyKinds StandaloneKindSignatures ExistentialQuantification
+                      TypeOperators ConstraintKinds ExplicitForAll
+                      KindSignatures NamedWildCards ScopedTypeVariables
                       FlexibleContexts FlexibleInstances MultiParamTypeClasses ConstrainedClassMethods InstanceSigs TypeSynonymInstances
-                      DeriveDataTypeable DeriveFoldable DeriveFunctor DeriveTraversable StandaloneDeriving EmptyDataDeriving DeriveLift GeneralisedNewtypeDeriving DeriveGeneric
+                      DeriveDataTypeable DeriveFoldable DeriveFunctor
+                      DeriveTraversable StandaloneDeriving EmptyDataDeriving
+                      DeriveLift GeneralisedNewtypeDeriving DeriveGeneric
 
 executable decaf-compiler
   main-is:            Main.hs
   build-depends:      base >=4.14 && <5
   hs-source-dirs:     exe
+  default-language:   Haskell2010
+  ghc-options:        -Wall -O2
+  default-extensions: EmptyCase PostfixOperators TupleSections
+                      ImportQualifiedPost NamedFieldPuns BangPatterns
+                      BinaryLiterals HexFloatLiterals NumericUnderscores
+                      GADTSyntax RankNTypes TypeApplications PolyKinds StandaloneKindSignatures ExistentialQuantification
+                      TypeOperators ConstraintKinds ExplicitForAll
+                      KindSignatures NamedWildCards ScopedTypeVariables
+                      FlexibleContexts FlexibleInstances MultiParamTypeClasses ConstrainedClassMethods InstanceSigs TypeSynonymInstances
+                      DeriveDataTypeable DeriveFoldable DeriveFunctor
+                      DeriveTraversable StandaloneDeriving EmptyDataDeriving
+                      DeriveLift GeneralisedNewtypeDeriving DeriveGeneric
+
+test-suite lexer
+  type:               exitcode-stdio-1.0
+  main-is:            LexerTest.hs
+  hs-source-dirs:     test
+  build-depends:      base >=4.14 && <5
+                  ,   decaf-compiler
+                  ,   directory
+                  ,   tasty
+                  ,   tasty-hunit
   default-language:   Haskell2010
   ghc-options:        -Wall -O2
   default-extensions: EmptyCase PostfixOperators TupleSections ImportQualifiedPost NamedFieldPuns BangPatterns
@@ -50,9 +76,9 @@ executable decaf-compiler
                       FlexibleContexts FlexibleInstances MultiParamTypeClasses ConstrainedClassMethods InstanceSigs TypeSynonymInstances
                       DeriveDataTypeable DeriveFoldable DeriveFunctor DeriveTraversable StandaloneDeriving EmptyDataDeriving DeriveLift GeneralisedNewtypeDeriving DeriveGeneric
 
-test-suite lexer
+test-suite parser
   type:               exitcode-stdio-1.0
-  main-is:            LexerTest.hs
+  main-is:            ParserTest.hs
   hs-source-dirs:     test
   build-depends:      base >=4.14 && <5
                   ,   decaf-compiler
